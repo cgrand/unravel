@@ -288,5 +288,5 @@
                     (ensure-unrepl)
                     (let [{:keys [::ex ::phase]
                            :or {ex e phase :repl}} (ex-data e)]
-                      (write [:exception {:ex e :phase phase} @eval-id]))))))))
-
+                      (write [:exception {:ex e :phase phase} @eval-id]))))
+        (write [:bye])))))
