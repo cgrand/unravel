@@ -42,7 +42,10 @@ Parts of this specification assumes two REPLs: the main (or user) REPL and the c
 
 ## Usage
 
-Users don't need to care about unrepl, not even add it to their project deps. Just use [nice clients](#clients).
+Most users don't need to care about unrepl, not even add it to their project deps. Just use [nice clients](#clients).
+
+If you actually want to manually upgrade a socket REPL to an unrepl or write you own client, please check the
+documentation at [UPGRADE.md](UPGRADE.md).
 
 ## Spec
 
