@@ -25,6 +25,11 @@
           (.invoke define-class this (to-array name bytes 0 (count bytes)))
           (throw (ClassNotFoundException. name)))))))
 
+(defonce ^:private sessions (atom {}))
+
+(defn session [id]
+  (some-> @sessions (get id) deref))
+
 (defn ^java.io.Writer tagging-writer
   ([write]
    (proxy [java.io.Writer] []
@@ -72,6 +77,32 @@
         (reset! awrite nil)))))
 
 (def ^:dynamic write)
+
+(defn default-print-settings [sl]
+  "Return print settings with clojure.core's `*print-length*` and
+  `*print-level*` global vars as default."
+  {:string-length sl
+   :coll-length   *print-length*
+   :nesting-depth *print-level*})
+
+(defn- get-print-settings [session-id context]
+  "Return the `context` print settings for the given `session-id`."
+  (when-let [settings (some-> session-id session :print-settings context)]
+    (merge settings {:context context})))
+
+(defn update-print-settings! [session-id context string-length coll-length nesting-depth]
+  "Update session's print settings for `context` and return its previous state as a backup."
+  (let [session-atom    (some-> @sessions (get session-id))
+        backup-settings (-> @session-atom
+                            :print-settings
+                            context
+                            (rename-keys {:string-length :unrepl.print/string-length
+                                          :coll-length   :unrepl.print/coll-length
+                                          :nesting-depth :unrepl.print/nesting-depth}))]
+    (swap! session-atom assoc-in [:print-settings context :string-length] string-length)
+    (swap! session-atom assoc-in [:print-settings context :coll-length] coll-length)
+    (swap! session-atom assoc-in [:print-settings context :nesting-depth] nesting-depth)
+    backup-settings))
 
 (defn unrepl-reader [^java.io.Reader r before-read]
   (let [offset (atom 0)
@@ -148,8 +179,6 @@
               (if (= NULL x) nil x)
               not-found))}))
 
-(defonce ^:private sessions (atom {}))
-
 (defonce ^:private elision-store (soft-store #(list `fetch %) p/unreachable))
 (defn fetch [id]
   (let [x ((:get elision-store) id)]
@@ -160,8 +189,6 @@
       (instance? unrepl.print.MimeContent x) x
       :else (seq x))))
 
-(defn session [id]
-  (some-> @sessions (get id) deref))
 
 (defn interrupt! [session-id eval]
   (let [{:keys [^Thread thread eval-id promise]}
@@ -210,31 +237,6 @@
                    (prn [k name])
                    (some-> (edn/read {:eof nil} in) p/base64-decode)))))))
   (let [o (Object.)] (locking o (.wait o))))
-
-(defn default-print-settings [sl]
-  "Return print settings with clojure.core's `*print-length*` and
-  `*print-level*` global vars as default."
-  {:string-length sl
-   :coll-length   *print-length*
-   :nesting-depth *print-level*})
-
-(defn- get-print-settings [session-id context]
-  "Return the `context` print settings for the given `session-id`."
-  (some-> session-id session :print-settings context))
-
-(defn update-print-settings! [session-id context string-length coll-length nesting-depth]
-  "Update session's print settings for `context` and return its previous state as a backup."
-  (let [session-atom    (some-> @sessions (get session-id))
-        backup-settings (-> @session-atom
-                            :print-settings
-                            context
-                            (rename-keys {:string-length :unrepl.print/string-length
-                                          :coll-length   :unrepl.print/coll-length
-                                          :nesting-depth :unrepl.print/nesting-depth}))]
-    (swap! session-atom assoc-in [:print-settings context :string-length] string-length)
-    (swap! session-atom assoc-in [:print-settings context :coll-length] coll-length)
-    (swap! session-atom assoc-in [:print-settings context :nesting-depth] nesting-depth)
-    backup-settings))
 
 (defn set-file-line-col [session-id file line col]
   (when-some [^java.lang.reflect.Field field
