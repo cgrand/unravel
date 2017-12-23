@@ -64,13 +64,12 @@
         (.write w "\n")
         (.flush w)))))
 
-(defn fuse-write [awrite]
-  (fn [x]
-    (when-some [w @awrite]
-      (try
-        (w x)
-        (catch Throwable t
-          (reset! awrite nil))))))
+(defn fuse-write [awrite x]
+  (when-some [w @awrite]
+    (try
+      (w x)
+      (catch Throwable t
+        (reset! awrite nil)))))
 
 (def ^:dynamic write)
 
@@ -219,6 +218,10 @@
    :coll-length   *print-length*
    :nesting-depth *print-level*})
 
+(defn- get-print-settings [session-id context]
+  "Return the `context` print settings for the given `session-id`."
+  (some-> session-id session :print-settings context))
+
 (defn update-print-settings! [session-id context string-length coll-length nesting-depth]
   "Update session's print settings for `context` and return its previous state as a backup."
   (let [session-atom    (some-> @sessions (get session-id))
@@ -272,13 +275,19 @@
     (let [session-id (keyword (gensym "session"))
           raw-out *out*
           aw (atom (atomic-write raw-out))
-          write-here (fuse-write aw)
+          write-here (fn [x]
+                       (let [settings (or (some->> x first (get-print-settings session-id))
+                                          (default-print-settings 80))]
+                         (binding [p/*string-length* (:string-length settings)
+                                   *print-length*    (:coll-length settings)
+                                   *print-level*     (:nesting-depth settings)]
+                           (fuse-write aw x))))
           schedule-writer-flush! (writers-flushing-repo 50) ; 20 fps (flushes per second)
           scheduled-writer (fn [& args]
                              (-> (apply tagging-writer args)
                                  java.io.BufferedWriter.
                                  (doto schedule-writer-flush!)))
-          edn-out (scheduled-writer :out (fn [x] (binding [p/*string-length* Integer/MAX_VALUE] (write-here x))))
+          edn-out (scheduled-writer :out write-here)
           ensure-raw-repl (fn []
                             (when (and @in-eval @unrepl) ; reading from eval!
                               (var-set unrepl false)
@@ -382,7 +391,6 @@
                 *file* "unrepl-session"
                 *source-path* "unrepl-session"
                 p/*elide* (:put elision-store)
-                p/*string-length* p/*string-length*
                 write write-here]
         (.setContextClassLoader (Thread/currentThread) slcl)
         (with-bindings {clojure.lang.Compiler/LOADER slcl}
@@ -411,15 +419,14 @@
                                                    :len (- offset' offset)}
                                             id])
                                     (if (and (seq?  r) (= (first r) 'unrepl/do))
-                                      (let [write #(binding [p/*string-length* Integer/MAX_VALUE] (write %))]
+                                      (do
                                         (flushing [*err* (tagging-writer :err id write)
                                                    *out* (scheduled-writer :out id write)]
                                                   (eval (cons 'do (next r))))
                                         request-prompt)
                                       r))))
              :eval (fn [form]
-                     (let [id @eval-id
-                           write #(binding [p/*string-length* Integer/MAX_VALUE] (write %))]
+                     (let [id @eval-id]
                        (flushing [*err* (tagging-writer :err id write)
                                   *out* (scheduled-writer :out id write)]
                                  (interruptible-eval form))))
