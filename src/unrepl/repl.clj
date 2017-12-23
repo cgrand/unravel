@@ -1,8 +1,9 @@
 (ns unrepl.repl
   (:require [clojure.main :as m]
-            [unrepl.print :as p]
             [clojure.edn :as edn]
-            [clojure.java.io :as io]))
+            [clojure.java.io :as io]
+            [clojure.set :refer [rename-keys]]
+            [unrepl.print :as p]))
 
 (defn classloader
   "Creates a classloader that obey standard delegating policy.
@@ -211,6 +212,27 @@
                    (some-> (edn/read {:eof nil} in) p/base64-decode)))))))
   (let [o (Object.)] (locking o (.wait o))))
 
+(defn default-print-settings [sl]
+  "Return print settings with clojure.core's `*print-length*` and
+  `*print-level*` global vars as default."
+  {:string-length sl
+   :coll-length   *print-length*
+   :nesting-depth *print-level*})
+
+(defn update-print-settings! [session-id context string-length coll-length nesting-depth]
+  "Update session's print settings for `context` and return its previous state as a backup."
+  (let [session-atom    (some-> @sessions (get session-id))
+        backup-settings (-> @session-atom
+                            :print-settings
+                            context
+                            (rename-keys {:string-length :unrepl.print/string-length
+                                          :coll-length   :unrepl.print/coll-length
+                                          :nesting-depth :unrepl.print/nesting-depth}))]
+    (swap! session-atom assoc-in [:print-settings context :string-length] string-length)
+    (swap! session-atom assoc-in [:print-settings context :coll-length] coll-length)
+    (swap! session-atom assoc-in [:print-settings context :nesting-depth] nesting-depth)
+    backup-settings))
+
 (defn set-file-line-col [session-id file line col]
   (when-some [^java.lang.reflect.Field field
               (->> clojure.lang.LineNumberingPushbackReader
@@ -268,6 +290,11 @@
           session-state (atom {:current-eval {}
                                :in in
                                :write-atom aw
+                               :print-settings (merge
+                                                (zipmap [:eval :log]
+                                                        (repeat (default-print-settings 80)))
+                                                (zipmap [:out :err :exception]
+                                                        (repeat (default-print-settings Long/MAX_VALUE))))
                                :log-eval (fn [msg]
                                            (when (bound? eval-id)
                                              (write [:log msg @eval-id])))
@@ -285,6 +312,7 @@
                                       *print-level* Long/MAX_VALUE
                                       p/*string-length* Long/MAX_VALUE]
                               (write [:unrepl/hello {:session session-id
+                                                     :print-settings (:print-settings @session-state)
                                                      :actions (into
                                                                {:exit `(exit! ~session-id)
                                                                 :start-aux `(start-aux ~session-id)
@@ -292,14 +320,12 @@
                                                                 `(some-> ~session-id session :log-eval)
                                                                 :log-all
                                                                 `(some-> ~session-id session :log-all)
-                                                                :print-limits
-                                                                `(let [bak# {:unrepl.print/string-length p/*string-length*
-                                                                             :unrepl.print/coll-length *print-length*
-                                                                             :unrepl.print/nesting-depth *print-level*}]
-                                                                   (some->> ~(tagged-literal 'unrepl/param :unrepl.print/string-length) (set! p/*string-length*))
-                                                                   (some->> ~(tagged-literal 'unrepl/param :unrepl.print/coll-length) (set! *print-length*))
-                                                                   (some->> ~(tagged-literal 'unrepl/param :unrepl.print/nesting-depth) (set! *print-level*))
-                                                                   bak#)
+                                                                :print-settings
+                                                                `(update-print-settings! ~session-id
+                                                                                         ~(tagged-literal 'unrepl/param :unrepl.print/context)
+                                                                                         ~(tagged-literal 'unrepl/param :unrepl.print/string-length)
+                                                                                         ~(tagged-literal 'unrepl/param :unrepl.print/coll-length)
+                                                                                         ~(tagged-literal 'unrepl/param :unrepl.print/nesting-depth))
                                                                 :set-source
                                                                 `(unrepl/do
                                                                    (set-file-line-col ~session-id
@@ -309,7 +335,6 @@
                                                                 :unrepl.jvm/start-side-loader
                                                                 `(attach-sideloader! ~session-id)}
                                                                #_ext-session-actions)}]))))
-
           interruptible-eval
           (fn [form]
             (try
