@@ -78,27 +78,38 @@
 
 (def ^:dynamic write)
 
-(defn default-print-settings [sl]
-  "Return print settings with clojure.core's `*print-length*` and
-  `*print-level*` global vars as default."
-  {:string-length sl
-   :coll-length   *print-length*
-   :nesting-depth *print-level*})
+(defn print-settings-map
+  "Return print settings map with clojure.core's `*print-length*` and
+  `*print-level*` global vars as default, and with the possibility to customize
+  `unrepl.print/*string-length*` to any value."
+  ([] (print-settings-map p/*string-length*))
+  ([sl]
+   {:string-length sl
+    :coll-length   *print-length*
+    :nesting-depth *print-level*}))
 
-(defn- get-print-settings [session-id context]
+(defn- print-settings-fully-qualify
+  "Rename keys in `settings-map` to have them as fully qualified keywords.
+  This function is meant to be used to return print settings to clients."
+  [settings-map]
+  (rename-keys settings-map {:string-length :unrepl.print/string-length
+                             :coll-length   :unrepl.print/coll-length
+                             :nesting-depth :unrepl.print/nesting-depth}))
+
+(defn- get-print-settings
   "Return the `context` print settings for the given `session-id`."
+  [session-id context]
   (when-let [settings (some-> session-id session :print-settings context)]
     (merge settings {:context context})))
 
-(defn update-print-settings! [session-id context string-length coll-length nesting-depth]
+(defn update-print-settings!
   "Update session's print settings for `context` and return its previous state as a backup."
+  [session-id context string-length coll-length nesting-depth]
   (let [session-atom    (some-> @sessions (get session-id))
         backup-settings (-> @session-atom
                             :print-settings
                             context
-                            (rename-keys {:string-length :unrepl.print/string-length
-                                          :coll-length   :unrepl.print/coll-length
-                                          :nesting-depth :unrepl.print/nesting-depth}))]
+                            print-settings-fully-qualify)]
     (swap! session-atom assoc-in [:print-settings context :string-length] string-length)
     (swap! session-atom assoc-in [:print-settings context :coll-length] coll-length)
     (swap! session-atom assoc-in [:print-settings context :nesting-depth] nesting-depth)
@@ -189,6 +200,16 @@
       (instance? unrepl.print.MimeContent x) x
       :else (seq x))))
 
+(defn contextual-elision
+  "Return a function that puts its first argument into the elision store.  The
+  returned function may also accept a second argument to be a printing context,
+  the elision-store result is extended with the print-settings for the given
+  `session-id` and context.  If context is not provided, `:eval` is used as
+  default."
+  [x]
+  (merge
+   ((:put elision-store) x)
+   {:print-settings (print-settings-fully-qualify (print-settings-map))}))
 
 (defn interrupt! [session-id eval]
   (let [{:keys [^Thread thread eval-id promise]}
@@ -281,7 +302,7 @@
            aw (atom (atomic-write raw-out))
            write-here (fn [x]
                         (let [settings (or (some->> x first (get-print-settings (or parent-session-id session-id)))
-                                           (default-print-settings 80))]
+                                           (print-settings-map 80))]
                           (binding [p/*string-length* (:string-length settings)
                                     *print-length*    (:coll-length settings)
                                     *print-level*     (:nesting-depth settings)]
@@ -306,9 +327,9 @@
                                 :write-atom aw
                                 :print-settings (merge
                                                  (zipmap [:eval :log]
-                                                         (repeat (default-print-settings 80)))
+                                                         (repeat (print-settings-map 80)))
                                                  (zipmap [:out :err :exception]
-                                                         (repeat (default-print-settings Long/MAX_VALUE))))
+                                                         (repeat (print-settings-map Long/MAX_VALUE))))
                                 :log-eval (fn [msg]
                                             (when (bound? eval-id)
                                               (write [:log msg @eval-id])))
@@ -395,7 +416,7 @@
                  *in* in
                  *file* "unrepl-session"
                  *source-path* "unrepl-session"
-                 p/*elide* (:put elision-store)
+                 p/*elide* contextual-elision
                  write write-here]
          (.setContextClassLoader (Thread/currentThread) slcl)
          (with-bindings {clojure.lang.Compiler/LOADER slcl}
