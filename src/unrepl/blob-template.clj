@@ -9,4 +9,4 @@
 <BLOB-PAYLOAD>
 <<<FIN
 (clojure.core/ns user)
-(unrepl.repl/start (read))
+(unrepl.repl/start (unrepl.repl/read-ext-session-actions))

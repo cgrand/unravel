@@ -278,6 +278,18 @@
                              eval-id])))))
       request-prompt)))
 
+(defn read-ext-session-actions
+  []
+  (->> (edn/read {:default tagged-literal} *in*)
+    (into {} (map (fn [[k v]]
+                    [k (if (and (seq? v)
+                                (symbol? (first v))
+                                (namespace (first v)))
+                         `(do
+                            (require '~(symbol (namespace (first v))))
+                            ~v)
+                         v)])))))
+
 (defn start [ext-session-actions]
   (with-local-vars [prompt-vars #{#'*ns* #'*warn-on-reflection*}
                     current-eval-future nil]
@@ -416,8 +428,3 @@
       (start)
       (finally
         (.setContextClassLoader (Thread/currentThread) cl)))))
-
-(defmacro ensure-ns [[fully-qualified-var-name & args :as expr]]
-  `(do
-     (require '~(symbol (namespace fully-qualified-var-name)))
-     ~expr))
